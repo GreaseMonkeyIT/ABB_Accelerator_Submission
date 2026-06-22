@@ -48,7 +48,7 @@ up() {
     kubectl apply -f "$HERE/api.yaml"
     echo "L2 aggregator + L3 correlation engine + L4 API deployed to aiops (P3/P4/P6)"
   fi
-  has language  && echo "P5 narrator: served by the api gateway (/api/narrative); set OLLAMA_HOST to the host Ollama, else it serves the template fallback"
+  has language  && echo "P5 narrator: api gateway /api/narrative calls Ollama (model + OLLAMA_HOST baked in api.yaml: gemma4:e4b-it-qat @ the host); deterministic template fallback if Ollama is unreachable"
   if has dashboard; then
     kubectl get ns aiops >/dev/null 2>&1 || kubectl create ns aiops
     kubectl apply -f "$HERE/dashboard.yaml"

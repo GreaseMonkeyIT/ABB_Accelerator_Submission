@@ -30,7 +30,7 @@ SIGNAL_RESOURCE = {"psi_io": "disk I/O", "psi_cpu": "CPU", "psi_mem": "memory"} 
 # The one LLM. Unset OLLAMA_HOST -> /api/narrative serves the deterministic template only, so the
 # verdict never depends on the model being reachable (the demo must survive a model outage).
 OLLAMA = os.environ.get("OLLAMA_HOST", "").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:e4b-it-qat")  # default matches deploy/api.yaml (QAT 6.1GB)
 # Right-sizing thresholds (PS-Q4): p95 usage vs requests/limits -> KAI scheduler verbs.
 RECLAIM_FRAC = float(os.environ.get("RECLAIM_FRAC", "0.5"))   # p95 < this * request -> over-provisioned -> reclaim
 RESIZE_FRAC = float(os.environ.get("RESIZE_FRAC", "0.85"))    # p95 > this * limit  -> at-risk -> resize up

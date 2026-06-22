@@ -23,6 +23,7 @@ Expected verdict (box-measured, LOG-070): **root = cooling-monitor (score 1.00)*
 `cooling-monitor -> timescaledb` evidence `[write, pvc, temporal]` (signal psi_io), blast radius =
 timescaledb + dcim-bridge; threshold-free. gemma4 narrates it; `case_register = recurrence` on repeats.
 
-Reset: `./reset.sh`; the verdict self-clears ~2-3 min after the storm ends (recency gate, RESET_WINDOW).
+Reset: `./reset.sh`; the verdict self-clears ~3-5 min after the 120s storm ends (recency gate, RESET_WINDOW) -- the
+longer storm that makes rooting reliable also lengthens the decay tail.
 Rehearse and log pass/fail in `ledger.csv`. S0 must stay silent before/after (the cool-mon idle journal
 is now a bare-minimum unsynced heartbeat, so steady state writes ~nothing to the shared disk).

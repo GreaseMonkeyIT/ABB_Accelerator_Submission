@@ -157,7 +157,15 @@ make charts          # helm lint + template the factory chart
 
 `make import` and `skctl up` are both idempotent — re-run after any change.
 
-**Single-disk box.** The chart pins the two factory PVCs to a `slowdisk` StorageClass (a dedicated HDD on the reference box, see `deploy/slowdisk.yaml`). On a plain single-disk PC, set both `storageClass: slowdisk` → `local-path` under `pvcs:` in `deploy/charts/factory/values.yaml` before `skctl up` (or delete the key — it defaults to `local-path`).
+**Storage.** The two factory PVCs (`tsdb-pvc`, `shared-logs-pvc`) bind to a `slowdisk` StorageClass — static local PVs on a dedicated HDD, which keeps the S1/S2 disk contention realistic (D-014). **`skctl up` does not create these**, so set storage up first:
+
+- **Reference box (dedicated HDD):** prep the HDD (see the header of `deploy/slowdisk.yaml`), then apply the static PVs **before** `skctl up`:
+  ```bash
+  NODE=$(kubectl get node -o jsonpath='{.items[0].metadata.labels.kubernetes\.io/hostname}')
+  sed "s/<NODE_NAME>/$NODE/g" deploy/slowdisk.yaml | kubectl apply -f -
+  ```
+  These PVs use `Retain`: after a teardown that deletes the PVCs they go `Released` and won't rebind — `kubectl delete pv tsdb-pv-slowdisk shared-logs-pv-slowdisk` and re-apply the line above before redeploying.
+- **Plain single-disk PC:** skip slowdisk — set both `storageClass: slowdisk` → `local-path` under `pvcs:` in `deploy/charts/factory/values.yaml` before `skctl up` (or delete the key — it defaults to `local-path`).
 
 ## Verify
 
@@ -168,7 +176,7 @@ bash appendix/component_check.sh                       # P0-P2 per-component swe
 bash appendix/verify_taps.sh                           # telemetry taps (add --strict once eBPF collectors are in)
 ```
 
-Give it ~5 minutes for TimescaleDB to populate and the aggregator's 15-minute ring to fill.
+**Warm-up.** A *fresh/cold* deploy needs **~15–20 minutes** before it's demo-ready: TimescaleDB populates, the aggregator's 15-minute ring fills, and — the slow part — the engine learns each pod's steady-state PSI baseline. Detection is deviation-based, so the engine only goes *silent* once it has a baseline to deviate from; until then `/api/graph` shows transient TimescaleDB initial-I/O findings that clear on their own to `findings: []` (S0). A warm redeploy (with `engine-memory-pvc` kept) is silent in ~5 min.
 
 ## Scenarios
 
@@ -183,7 +191,7 @@ Each scenario under `scenarios/` is version-controlled with a runbook and a rese
 | S4 | Network degradation and retry amplification | Injected latency on an egress service |
 | S5 | Memory leak and OOM termination | Unbounded growth to the container memory limit |
 
-**Live and verified today: S0, S1, S5.** S2 fires, but clean root-attribution is a mark-two item — the dominant writer is unambiguous yet no co-resident stalls hard enough to form a victim edge, so the engine correctly forms *no* root (the threshold-free discipline working, not a bug). S3 (CPU) and S4 (network) are out of scope here (node-saturation physics / Chaos Mesh) — see [Status](#status). A press-this/say-this walkthrough is in [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md).
+**Live and verified today: S0, S1, S5.** S2 (large-file write storm) is a **root-attribution refinement in progress**: the engine reliably detects the disk stress on timescaledb, but precisely attributing it to an *on-demand* write job needs further tuning — a short-lived CronJob source hasn't established a steady-state PSI baseline to deviate from, and the ranking can still favor a persistent backbone edge. Tracked for the next iteration; **S1 is the proven, fully-attributed disk-causality path.** S3 (CPU) and S4 (network) are out of scope here (node-saturation physics / Chaos Mesh) — see [Status](#status). A press-this/say-this walkthrough is in [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md).
 
 **Fire S1 (the proven path) and read the causal graph:**
 
@@ -192,7 +200,7 @@ bash scenarios/S1/trigger.sh; sleep 50
 kubectl get --raw "/api/v1/namespaces/aiops/services/correlation-engine:9100/proxy/graph" | python3 -m json.tool
 ```
 
-Expected: `root_cause_ranking[0] = cooling-monitor`, an edge `cooling-monitor → timescaledb` with `evidence: ["stat","pvc","write","temporal"]` (the `write` token is the io_write source attribution — the source blamed, not just a stalling victim), and a blast radius, with no resource threshold in the path.
+Expected: `root_cause_ranking[0] = cooling-monitor`, an edge `cooling-monitor → timescaledb` with `evidence: ["write","pvc","temporal"]` (the `write` token is the io_write source attribution — the source blamed, not just a stalling victim; `stat` also appears once the correlation is strong enough), and a blast radius, with no resource threshold in the path.
 
 **Deeper check — per-pod psi_io and the onsets the engine detects:**
 

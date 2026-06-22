@@ -4,6 +4,8 @@
 Team: Soumyadip Das · Shivam Kumar · B Kishan · Aaryan Shyam Pillai
 Status: Finalist (6 of 1000+). This document is the single source of truth for the Round 2 build.
 
+> **As-built reconciliation (2026-06-22 — authoritative where it differs from the design vision below; see `EXPLANATIONS.md` for the code map).** L3 is plain **deterministic Python** (`run_pass` + the engine modules) — **LangGraph/LangChain is NOT used** (the nodes compose as plain in-process Python; no orchestration runtime was needed). The one LLM (**`gemma4:e4b-it-qat`** via Ollama) runs **on the host** (external `OLLAMA_HOST`), **not as a cluster pod**, and only narrates the finished verdict. Of the five named agents, **A1** (changepoint + OOM forecast), **A4** (lag-correlation), and **A5-ranking** are built as deterministic modules; **A2 Log Detective** (needs Loki) and the **A5 bounded-tool Orchestrator** are **roadmap, not built**. Read the "LangGraph / agents-on-Ollama / Ollama-pod / phi3.5-qwen" phrasing below as the original design vision, not the implementation.
+
 ---
 
 ## 0. Mission & the Round 2 bar
@@ -13,7 +15,7 @@ The deck promised, the demo must deliver:
 | Promise (deck) | Round 2 proof |
 |---|---|
 | Real-time discovery of CPU/RAM/disk/PVC/network across all namespaces | Live dashboard showing 5 signal dimensions per pod, all namespaces |
-| Multi-agent AI analysis (CPU, Memory, Storage/PVC, Log/IO) | 5 autonomous inference agents (statistical/graph engines, D-002) + local Ollama narrator, replayable reasoning traces |
+| Multi-agent AI analysis (CPU, Memory, Storage/PVC, Log/IO) | Deterministic inference engine — changepoint · lag-correlation · evidence-gate · ranking · OOM forecast (D-002, no LLM in the loop) + one local **gemma4** narrator; deterministic replay. (A2 Log-Detective / tool-calling Orchestrator: roadmap.) |
 | Interdependency mapping | eBPF topology + lag-correlation weighted causal graph, live |
 | Intelligent recommendations, alerts, forecasting | NLP remediation cards + threshold alerts + trend forecast |
 | < 30s detection, air-gapped | Stopwatch on demo: chaos trigger → NLP root cause < 30s, WiFi off |
@@ -49,7 +51,7 @@ flowchart TB
     end
     subgraph L3["L3 · Correlation + Multi-Agent AI"]
         CORR[Lag-correlation engine<br/>Python · NumPy/SciPy]
-        AGENTS[LangGraph agents on Ollama:<br/>Resource · Log Detective · NetTopo · Orchestrator · NLP]
+        AGENTS[Deterministic inference, Python:<br/>detect · lag-corr · gate · rank · OOM forecast]
     end
     subgraph L4["L4 · Presentation"]
         GO[Go WebSocket/REST backend]
@@ -65,7 +67,7 @@ flowchart TB
 |---|---|---|---|
 | L1 → L2 | HTTP pull (PromQL/LogQL range queries) | Prometheus/Loki native | every 5s |
 | L2 → L3 | NATS-less: HTTP POST + on-disk JSONL ring buffer | `Event` JSON (schema §1.3.3) | 5s bundles |
-| L3 corr → L3 agents | LangGraph state | `CausalGraph` JSON (§1.4.4) | on anomaly or 30s |
+| L3 corr → L3 ranking | in-process Python call | `CausalGraph` JSON (§1.4.4) | on anomaly or 30s |
 | L3 → L4 | REST + WebSocket push | `Insight`, `GraphUpdate`, `Alert` | event-driven |
 
 ### 1.1 Cluster substrate
@@ -128,7 +130,7 @@ Design rulings:
 
 **Design stance (D-002, BUILD_LOG LOG-003):** "AI agent" does not mean "LLM call". An agent here is *any autonomous inference engine with a defined input contract, a decision policy, and a structured output* — statistical, graph-theoretic, or neural. Four of the five agents parameterize and categorize threats entirely by themselves, with no language model in the loop. Exactly one LLM exists in the whole system, at the language edge (§1.5). Consequences: deterministic reruns, no hallucination surface inside the reasoning core, sub-second agent latency, and the model can stay cold until an incident needs narrating.
 
-**Where it runs:** one pod (`aiops` ns), Python 3.12, ~300–400 MB. LangGraph orchestrates (it composes plain Python nodes just as happily as LLM nodes — we keep its state machine, checkpointing, and retry semantics; consistent with the deck's "LangChain workflow orchestration"). FastAPI serves results; Ollama runs as a separate pod, called by the language layer only.
+**Where it runs:** one pod (`aiops` ns), Python 3.12, ~300–400 MB. The pipeline is **plain Python** — `run_pass` composes the engine modules in-process; **no LangGraph/LangChain runtime is used** (the nodes never needed one). FastAPI serves results; the one LLM (**`gemma4:e4b-it-qat`** via Ollama) runs **on the host** (external `OLLAMA_HOST`), called by the language layer only.
 
 #### 1.4.1 The five agents
 
@@ -170,7 +172,7 @@ Edges carry their evidence list `[stat, ebpf|psi|pvc, temporal]` — every line 
 - **Blast radius / forecast:** forward BFS with weight decay (w×0.7 per hop, cut at 0.15) → impacted set + *predicted next victims* with ETA from edge lags — this is the "forecasting" demo beat.
 - Output `CausalGraph`: `{nodes[], edges[{src,dst,r,lag_s,evidence[]}], root_cause_ranking[{pod,score,onset_ts}], blast_radius[], fairness_index}` — fully deterministic, JSON-schema-frozen.
 
-#### 1.4.6 Orchestration & scheduling (LangGraph wiring)
+#### 1.4.6 Orchestration & scheduling (in-process Python wiring)
 
 ```
 trigger: anomaly_candidate event (L2)  ──┐            cadence: every 30s idle tick
@@ -181,7 +183,7 @@ trigger: anomaly_candidate event (L2)  ──┐            cadence: every 30s i
                     steady topology
 ```
 
-A1–A3 run parallel (LangGraph fan-out), A4 joins, A5 gates. Full pass budget: < 2 s without LLM. Checkpointed state means a crashed pass resumes, and judges can replay any incident step-by-step from the LangGraph trace — a strong transparency demo.
+A1/A4/A5 run per signal inside `run_pass` (A2 Log-Detective / A3 NetTopo are roadmap), A5 gates on confidence. Full pass budget: < 2 s, no LLM. The pass is **deterministic and pure**, so a rerun reproduces the verdict exactly and judges can replay any incident from the stored graph snapshots — the transparency demo, without a LangGraph trace.
 
 #### 1.4.7 Failure modes & answers
 

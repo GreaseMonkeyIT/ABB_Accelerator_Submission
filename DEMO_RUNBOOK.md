@@ -10,8 +10,11 @@ scripts / `POST /api/scenarios/<id>/trigger`).
 1. `./deploy/skctl status` — every factory pod `Running`; in `aiops`, engine / api / dashboard `Running`.
 2. **Warm the narrator:** open the dashboard once (the 5 s narrative poll loads gemma4), or
    `curl -s localhost:8088/api/narrative >/dev/null`. First load is ~20–30 s; `keep_alive` holds it warm.
-3. **Confirm baseline silence:** the verdict reads **steady / no causal contention** (this is S0,
-   the control).
+3. **Confirm baseline silence (S0):** `/api/graph` reads `findings: []`, no root, verdict **steady**. On a
+   *fresh/cold* deploy this takes **~15–20 min** — detection is deviation-based, so the engine must first learn each
+   pod's steady-state PSI baseline (and TimescaleDB must finish its initial-population I/O); until then you'll see
+   transient TimescaleDB I/O findings that clear on their own. A warm redeploy (engine-memory kept) is silent in
+   ~5 min. **Don't fire S1 until S0 is silent**, or the warm-up noise muddies the result.
 
 ## S0 — steady state (the control)  ~30 s
 
@@ -31,8 +34,9 @@ scripts / `POST /api/scenarios/<id>/trigger`).
   *source* from a per-pod write signal — cooling-monitor is the aggressor — and draw a threshold-free
   causal edge: correlation + a shared-volume witness + temporal order. No `value > limit` anywhere in
   the path."
-- **Reset:** Scenario console → S1 reset (or `scenarios/S1/reset.sh`). The verdict self-clears in
-  ~2–3 min (recency gate) — point this out: "no lingering hot edges."
+- **Reset:** Scenario console → S1 reset (or `scenarios/S1/reset.sh`). The verdict self-clears a few minutes
+  (~3–5) after the 120s storm ends — the recency gate decays the hot edge back to its structural floor; the longer
+  storm (needed for reliable rooting) lengthens the tail. Point this out: "no lingering hot edge, no manual cleanup."
 
 ## S5 — memory leak → OOM forecast  ~60 s
 
@@ -55,14 +59,16 @@ scripts / `POST /api/scenarios/<id>/trigger`).
 - **Q2 — PVC I/O ↔ pod restarts?** The I/O cascade is live (S1); the restart-probe linkage is future
   work.
 
-## S2 (optional) — the engine's restraint
+## S2 — attribution tuning in progress
 
-S2 fires a large write storm (`log-archiver`). The dominant writer is unambiguous, but no co-resident
-stalls hard enough to form a victim edge — so the engine forms **no false root**.
+S2 (large-file write storm via `log-archiver`) exercises the engine on a tougher case: a *short-lived* CronJob writer.
+The engine reliably sees the disk stress on timescaledb, but **precise source attribution here is still being tuned** —
+the on-demand source has no steady-state PSI baseline, and a persistent backbone edge can still rank ahead of it. So
+**lead with S1 for the disk-causality story** (clean, fully attributed) and treat S2 as a forward-looking case.
 
-- **Say (if asked):** "That's the threshold-free discipline working — a loud writer with no stalling
-  victim is *not* a root cause, and we don't invent one." (Clean S2 root-attribution is a tracked
-  next-step.)
+- **If asked about S2:** "Attributing an on-demand write job is the refinement we're working on — the source needs a
+  steady-state baseline to deviate from, and we're tuning the ranking so a persistent edge can't outrank a live
+  source. S1 is our proven disk-causality path."
 
 ## Fallbacks
 
@@ -70,4 +76,4 @@ stalls hard enough to form a victim edge — so the engine forms **no false root
   prose is additive. The demo never blocks on the model.
 - **Onset looks late:** trigger on settled pods — fresh pods need ~60 s of sample warm-up before the
   window fills.
-- **Verdict won't clear:** wait the recency window (~2–3 min) or hit the scenario reset.
+- **Verdict won't clear:** after a 120s storm the hot edge takes ~3–5 min to decay below the hot threshold — wait the recency window, or hit the scenario reset to force it.

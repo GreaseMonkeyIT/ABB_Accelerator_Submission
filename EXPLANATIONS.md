@@ -65,7 +65,7 @@ S1 is "PVC I/O contention cascade." Trace one button-press through the files:
    admits an edge only with real evidence, `ranking.py` names the root cause and the blast
    radius. The result is served at `/graph`.
 7. On a clean run the graph reads: **root = cooling-monitor**, edge **cooling-monitor →
-   timescaledb** (`evidence = [stat, pvc, temporal]`), blast radius = timescaledb. Source
+   timescaledb** (`evidence = [write, pvc, temporal]` — the **write** token is the source attribution), blast radius = timescaledb. Source
    correctly blamed, victim correctly predicted, **no resource threshold anywhere in the causal
    path** — only correlation, shared-disk topology, and time order.
 

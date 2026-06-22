@@ -4,7 +4,7 @@ End state: the 15-pod factory + telemetry + L2 aggregator + L3 correlation engin
 single-node K3s, and `S1` producing a causal graph at the engine's `/graph`. ~30 min, most of
 it image builds.
 
-> Repo: `https://github.com/GreaseMonkeyIT/ABB_Accelerator_Proto`
+> Repo: `https://github.com/GreaseMonkeyIT/ABB_Accelerator_Submission`
 
 ---
 
@@ -50,11 +50,11 @@ kubectl get --raw "/api/v1/nodes/$(kubectl get no -o name | cut -d/ -f2)/proxy/m
 ## 3. Clone, build, deploy
 
 ```bash
-git clone https://github.com/GreaseMonkeyIT/ABB_Accelerator_Proto.git
-cd ABB_Accelerator_Proto
+git clone https://github.com/GreaseMonkeyIT/ABB_Accelerator_Submission.git
+cd ABB_Accelerator_Submission
 chmod +x deploy/skctl appendix/*.sh scenarios/*/*.sh   # restore exec bits (harmless if already set)
 
-make import                 # docker build all 15 workloads + aggregator + correlation-engine, import into k3s containerd
+make import                 # docker build 15 workloads + aggregator + engine + api + dashboard, import into k3s containerd
 ./deploy/skctl up --mode solo   # deploy factory + telemetry + L2 + L3
 ```
 
@@ -78,7 +78,7 @@ bash appendix/verify_taps.sh                          # telemetry taps (add --st
 kubectl get pvc -n factory-data                       # tsdb-pvc + shared-logs-pvc -> Bound
 ```
 
-Then give it **~5 minutes** so TimescaleDB populates and the aggregator's 15-min ring fills.
+Then give a cold deploy **~15–20 minutes**: TimescaleDB populates, the aggregator's 15-min ring fills, and the engine learns each pod's steady-state PSI baseline. Detection is deviation-based, so it stays silent until it has a baseline — during warm-up `/graph` shows transient TimescaleDB I/O findings that clear on their own to `findings: []` (S0). A warm redeploy (engine-memory kept) is ready in ~5 min.
 
 ## 5. Fire a scenario and read the causal graph
 
@@ -88,11 +88,11 @@ sleep 50
 kubectl get --raw "/api/v1/namespaces/aiops/services/correlation-engine:9100/proxy/graph" | python3 -m json.tool
 ```
 
-Expect a JSON graph with: `edges` among the storage-domain pods (e.g. `cooling-monitor ->
-timescaledb` / `dcim-bridge`) carrying `evidence` like `["stat","psi","pvc"]` (statistical
-correlation + PSI co-pressure + shared-disk topology — **no resource thresholds in the causal
-path**), a `root_cause_ranking`, and a `blast_radius`. The engine searches the ring for the
-disturbance, so you can read `/graph` a minute or two after the storm and still see it.
+Expect a JSON graph with: `root_cause_ranking[0] = cooling-monitor`, a hot edge `cooling-monitor ->
+timescaledb` carrying `evidence` like `["write","pvc","temporal"]` (per-pod **write** = the source
+attribution + shared-disk topology + time order — **no resource thresholds in the causal path**), and a
+`blast_radius`. The engine searches the ring for the disturbance, so reading `/graph` ~50s in (mid-storm)
+shows it clearly; on a settled engine S1 lights up ~45–50s after the trigger.
 
 ## Operating notes
 
